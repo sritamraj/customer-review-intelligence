@@ -1,0 +1,81 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Testing / type checking
+# =========================
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Model checkpoints / large weights
+# =========================
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.onnx
+*.h5
+*.pkl
+
+# =========================
+# HuggingFace / Transformer caches
+# =========================
+**/checkpoint-*/
+**/.cache/
+.cache/
+
+# =========================
+# Datasets
+# =========================
+data/raw/*
+!data/raw/.gitkeep
+
+data/processed/*
+!data/processed/.gitkeep
+!data/processed/demo_reviews.csv
+
+# =========================
+# Generated artifacts
+# =========================
+artifacts/*
+!artifacts/.gitkeep
+
+# =========================
+# Local generated outputs
+# =========================
+*.log

@@ -1,0 +1,19 @@
+seed: 42
+
+data:
+  text_column: review
+  complaint_column: complaint
+  complaint_category_column: complaint_category
+
+training:
+  test_size: 0.2
+  max_features: 20000
+  ngram_range: [1, 2]
+  class_weight: balanced
+
+model:
+  baseline: tfidf_logreg
+  transformer_name: distilbert-base-uncased
+
+evaluation:
+  primary_metric: f1_macro
