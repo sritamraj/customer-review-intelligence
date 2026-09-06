@@ -1,244 +1,973 @@
 # Customer Review Intelligence
-### Aspect-Based Sentiment Analysis + Complaint Classification
 
-An end-to-end NLP research project for turning e-commerce customer reviews into structured product intelligence.
+### Aspect-Based Sentiment Analysis & Complaint Intelligence
 
-**Core tasks**
-1. Aspect extraction / aspect classification
-2. Aspect-level sentiment classification
-3. Complaint detection
-4. Complaint category classification
-5. Confidence-aware inference through a FastAPI service
+An end-to-end NLP research project for converting customer reviews into **aspect-level sentiment signals and complaint intelligence**.
 
-The project is deliberately designed as an **Applied Scientist portfolio project**: it includes baselines, transformer modeling, reproducible experiments, error analysis, calibration, unit tests, and a production-style inference API.
+The project investigates how classical NLP baselines compare with transformer-based models for aspect-based sentiment analysis (ABSA), with a particular focus on **class imbalance, rare-class behavior, and error analysis**.
 
-> This repository does not claim to use private Amazon data. The training pipeline is designed around public datasets and/or user-supplied review data.
+A lightweight rule-based complaint detector is then combined with the final ABSA model to produce structured customer-feedback signals.
 
-## Why this is relevant to Amazon Applied Science
+---
 
-Amazon's current Applied Scientist internship description emphasizes NLP/ML, large-scale data analysis, end-to-end system ownership, experimentation, scalable ML models, and research communication. This project is designed to demonstrate those exact skills through a customer-facing NLP problem. See the role description: https://www.amazon.jobs/en/jobs/10477346/applied-scientist-i-intern-jan-2027-6-months
+## 🎯 Project Objective
 
-## System
+Customer reviews often contain multiple product aspects with different sentiments:
+
+> "The battery lasts all day, but the charging cable stopped working."
+
+A document-level sentiment classifier may label the entire review as simply positive or negative.
+
+ABSA instead attempts to model sentiment at the **aspect level**:
 
 ```text
-Raw Reviews
-    |
-    v
-Data validation + cleaning
-    |
-    +----------------------------+
-    |                            |
-    v                            v
-Aspect/Sentiment data       Complaint data
-    |                            |
-    v                            v
-TF-IDF baselines            TF-IDF baselines
-    |                            |
-    +-------------+--------------+
-                  |
-                  v
-        Transformer models
-                  |
-                  v
-      Evaluation + calibration
-                  |
-                  v
-       Error analysis / slices
-                  |
-                  v
-       FastAPI inference API
+battery          → positive
+charging cable   → negative
 ```
 
-## Example
+This project explores that problem using a progression of increasingly capable models.
 
-Input:
-> "The battery lasts all day, but the charging cable stopped working after two weeks."
+---
 
-Structured output:
+# 🔬 Experimental Pipeline
 
-```json
-{
-  "aspects": [
-    {"aspect": "battery", "sentiment": "positive"},
-    {"aspect": "charging cable", "sentiment": "negative"}
-  ],
-  "complaint": true,
-  "complaint_category": "quality_or_defect"
-}
+```text
+                 Customer Reviews
+                        |
+                        v
+             Data preparation / cleaning
+                        |
+                        v
+              Aspect + sentiment pairs
+                        |
+          +-------------+-------------+
+          |                           |
+          v                           v
+   V1: Word TF-IDF             V2: Word + Char TF-IDF
+   + Logistic Regression       + Logistic Regression
+          |                           |
+          +-------------+-------------+
+                        |
+                        v
+              V3: Aspect-aware
+                DistilBERT
+                        |
+                        v
+             V4: DistilBERT +
+                 Focal Loss
+                        |
+                        v
+              Error Analysis
+                        |
+                        v
+        Rule-based Complaint Detection
+                        |
+                        v
+             Final Inference Pipeline
+                        |
+                        v
+             Structured Predictions
 ```
 
-## Repository structure
+The main scientific progression is:
+
+**classical baseline → feature improvement → transformer → imbalance-aware transformer → error analysis → complaint intelligence**
+
+---
+
+# 📊 Experimental Results
+
+The SemEval laptop ABSA dataset was split into:
+
+| Split      | Examples |
+| ---------- | -------: |
+| Train      |    1,670 |
+| Validation |      345 |
+| Test       |      332 |
+
+The training distribution is highly imbalanced, particularly for the **conflict** class.
+
+### Model comparison
+
+| Model                                              | Test Macro-F1 | Test Accuracy | Test Weighted-F1 |
+| -------------------------------------------------- | ------------: | ------------: | ---------------: |
+| V1 — Word TF-IDF + Logistic Regression             |    **0.4109** |        0.5994 |           0.5936 |
+| V2 — Word + Character TF-IDF + Logistic Regression |    **0.4193** |        0.6114 |           0.6043 |
+| V3 — Aspect-aware DistilBERT + Weighted CE         |    **0.5151** |        0.7048 |           0.7098 |
+| V4 — Aspect-aware DistilBERT + Focal Loss          |    **0.5437** |        0.6807 |           0.6930 |
+
+### Main result
+
+V4 improved test Macro-F1 from:
+
+```text
+V1: 0.4109
+        ↓
+V4: 0.5437
+```
+
+Absolute improvement:
+
+```text
++0.1328 Macro-F1
+```
+
+This corresponds to approximately a **32.3% relative improvement** over the V1 Macro-F1.
+
+The transformer-based models substantially improved performance over the TF-IDF baselines, particularly for the neutral class.
+
+---
+
+# 🧠 V1 — Classical Baseline
+
+### Word TF-IDF + Logistic Regression
+
+The first experiment establishes a simple and reproducible baseline.
+
+Features:
+
+* word-level TF-IDF
+* Logistic Regression
+* stratified training data
+* four sentiment classes:
+
+  * positive
+  * negative
+  * neutral
+  * conflict
+
+Results:
+
+```text
+Accuracy     = 0.5994
+Macro-F1     = 0.4109
+Weighted-F1  = 0.5936
+```
+
+The baseline struggled with:
+
+* neutral sentiment
+* mixed/conflicting sentiment
+* rare classes
+
+This provides a reference point for subsequent experiments.
+
+---
+
+# 🧪 V2 — Word + Character Features
+
+The second experiment combines:
+
+```text
+Word TF-IDF
+     +
+Character TF-IDF
+     ↓
+Logistic Regression
+```
+
+The motivation was to determine whether character-level information could improve robustness to lexical variation.
+
+Results:
+
+```text
+Accuracy     = 0.6114
+Macro-F1     = 0.4193
+Weighted-F1  = 0.6043
+```
+
+Macro-F1 improvement over V1:
+
+```text
++0.0084
+```
+
+The improvement was modest, motivating the transition to contextual transformer representations.
+
+---
+
+# 🤖 V3 — Aspect-Aware DistilBERT
+
+V3 introduces contextual modeling using:
+
+**DistilBERT (`distilbert-base-uncased`)**
+
+Instead of classifying the review independently of the aspect, the model receives:
+
+```text
+review_text + "[SEP]" + aspect
+```
+
+For example:
+
+```text
+Review:
+"The battery lasts all day but the charger is terrible."
+
+Aspect:
+"battery"
+```
+
+The model therefore receives both the review context and the target aspect.
+
+### Training configuration
+
+```text
+Model:              DistilBERT
+Input:              review + [SEP] + aspect
+Max length:         256
+Learning rate:      2e-5
+Train batch size:   8
+Evaluation batch:   16
+Epochs:             4
+Weight decay:       0.01
+Loss:               class-weighted Cross Entropy
+Selection metric:   validation Macro-F1
+```
+
+Best validation Macro-F1:
+
+```text
+0.5713
+```
+
+Test performance:
+
+```text
+Accuracy     = 0.7048
+Macro-F1     = 0.5151
+Weighted-F1  = 0.7098
+```
+
+### Per-class test F1
+
+| Sentiment |     F1 |
+| --------- | -----: |
+| Positive  | 0.7888 |
+| Negative  | 0.7491 |
+| Neutral   | 0.5224 |
+| Conflict  | 0.0000 |
+
+V3 demonstrated a major improvement over the classical baselines, but the conflict class remained extremely difficult.
+
+---
+
+# 🔥 V4 — Focal Loss
+
+V4 keeps the aspect-aware DistilBERT architecture but changes the training objective to **class-weighted Focal Loss**.
+
+The motivation was to investigate whether the model could improve its treatment of difficult and underrepresented examples.
+
+```text
+V3:
+DistilBERT
+    +
+Class-weighted Cross Entropy
+
+V4:
+DistilBERT
+    +
+Class-weighted Focal Loss
+```
+
+Configuration:
+
+```text
+Model:              DistilBERT
+Input:              review + [SEP] + aspect
+Max length:         256
+Learning rate:      2e-5
+Train batch size:   8
+Evaluation batch:   16
+Epochs:             4
+Weight decay:       0.01
+Focal gamma:        2.0
+Selection metric:   validation Macro-F1
+```
+
+### V4 test results
+
+```text
+Accuracy     = 0.6807
+Macro-F1     = 0.5437
+Weighted-F1  = 0.6930
+```
+
+Per-class F1:
+
+| Sentiment |   F1 |
+| --------- | ---: |
+| Positive  | 0.76 |
+| Negative  | 0.74 |
+| Neutral   | 0.50 |
+| Conflict  | 0.18 |
+
+V4 achieved the **highest test Macro-F1** among the evaluated models.
+
+---
+
+# ⚖️ Why Macro-F1?
+
+The dataset contains substantial class imbalance.
+
+In particular, the conflict class contains very few examples.
+
+Therefore, accuracy alone can hide poor performance on minority classes.
+
+The primary model-selection metric is consequently:
+
+```text
+Macro-F1
+```
+
+Macro-F1 gives each class equal importance:
+
+```text
+Macro-F1 =
+(F1_positive + F1_negative + F1_neutral + F1_conflict) / 4
+```
+
+Additional metrics include:
+
+* per-class precision
+* per-class recall
+* per-class F1
+* weighted-F1
+* accuracy
+* confusion matrices
+
+---
+
+# 🔎 Error Analysis
+
+Error analysis was performed after the transformer experiments rather than treating the final metric as the complete evaluation.
+
+For V4, the 332-example test set contained:
+
+```text
+Correct predictions: 226
+Errors:              106
+Accuracy:            0.6807
+```
+
+The largest confusion pattern was:
+
+```text
+negative → neutral : 27
+positive → neutral : 26
+positive → negative : 16
+neutral  → negative : 12
+negative → positive : 11
+```
+
+A major observation was that the model frequently predicted **neutral** for difficult examples.
+
+---
+
+# 🚨 Conflict-Class Analysis
+
+The conflict class is particularly challenging.
+
+V4 produced:
+
+```text
+Conflict precision = 0.33
+Conflict recall    = 0.12
+Conflict F1       = 0.18
+```
+
+There were only **8 conflict examples** in the test set.
+
+Therefore, this metric should not be interpreted as a stable estimate of real-world conflict performance.
+
+More importantly, error analysis showed that most missed conflict examples were predicted as:
+
+```text
+conflict → neutral
+```
+
+This suggests that the model struggles with **compositional or mixed sentiment**, rather than simply making random errors.
+
+Example:
+
+> "The 4 USB ports are nice, but the two on the side only work now and then."
+
+The sentence contains both positive and negative signals around the same aspect context.
+
+This is an important limitation of the current model.
+
+---
+
+# 📌 Aspect-Level Error Analysis
+
+Performance varies substantially by aspect.
+
+Examples from the V4 test analysis:
+
+| Aspect       | Correct / Total |
+| ------------ | --------------: |
+| battery      |           6 / 6 |
+| battery life |           3 / 5 |
+| screen       |         10 / 13 |
+| programs     |           7 / 8 |
+| keyboard     |           5 / 6 |
+| warranty     |           2 / 8 |
+| RAM          |           0 / 2 |
+| hinge        |           1 / 2 |
+
+These slices highlight that aggregate metrics can hide large differences between individual aspects.
+
+---
+
+# 🧾 Complaint Intelligence
+
+The SemEval ABSA dataset used for the sentiment experiments does **not provide a supervised complaint label**.
+
+Therefore, this project does **not fabricate complaint ground truth** and does not claim to have trained a supervised complaint classifier on SemEval.
+
+Instead, complaint detection is implemented as a **transparent rule-based baseline**.
+
+The detector combines:
+
+* review text
+* aspect context
+* predicted sentiment
+* complaint-related lexical patterns
+
+Examples of complaint signals include patterns associated with:
+
+```text
+not working
+doesn't work
+failed
+problem
+issue
+defective
+broken
+stopped working
+too slow
+overheating
+refund
+warranty
+expensive
+poor
+disappointed
+unable
+```
+
+The detector also assigns a coarse complaint reason such as:
+
+```text
+battery_power
+display
+input_device
+shipping
+service_warranty
+performance_reliability
+price_cost
+other
+```
+
+This is intentionally transparent and interpretable rather than presented as a supervised benchmarked complaint classifier.
+
+---
+
+# 🔗 Final Inference Pipeline
+
+The final inference system combines the V4 transformer with the complaint detector.
+
+```text
+Review
+  +
+Aspect
+  |
+  v
+V4 DistilBERT
+  |
+  +----------------------+
+  |                      |
+  v                      v
+Sentiment             Confidence
+  |
+  v
+Aspect-aware
+complaint rules
+  |
+  v
+Complaint + reason
+```
+
+The final inference output is stored as:
+
+```text
+artifacts/absa_v4/final_inference.csv
+```
+
+The output contains fields including:
+
+```text
+review_text
+aspect
+predicted_sentiment
+sentiment_confidence
+complaint
+complaint_reason
+```
+
+The final test-set inference pipeline generated predictions for:
+
+```text
+332 examples
+```
+
+---
+
+# 📁 Repository Structure
 
 ```text
 customer-review-intelligence/
+│
 ├── configs/
 │   └── config.yaml
+│
 ├── data/
-│   ├── raw/.gitkeep
-│   ├── processed/.gitkeep
+│   ├── raw/
+│   │   └── .gitkeep
+│   ├── processed/
+│   │   ├── .gitkeep
+│   │   └── demo_reviews.csv
 │   └── README.md
+│
 ├── notebooks/
 │   └── 01_exploration.md
-├── src/
-│   ├── __init__.py
-│   ├── data.py
-│   ├── models.py
-│   ├── train.py
-│   ├── evaluate.py
-│   ├── inference.py
-│   └── utils.py
-├── api/
-│   └── main.py
-├── tests/
-│   ├── test_data.py
-│   └── test_inference.py
+│
 ├── scripts/
 │   ├── prepare_demo_data.py
 │   └── run_experiment.py
+│
+├── src/
+│   ├── __init__.py
+│   ├── complaint_detector.py
+│   ├── data.py
+│   ├── data/
+│   │   ├── prepare_semeval.py
+│   │   └── split_semeval.py
+│   ├── error_analysis.py
+│   ├── evaluate.py
+│   ├── inference.py
+│   ├── models.py
+│   ├── train.py
+│   ├── transformer_absa.py
+│   ├── transformer_absa_v4.py
+│   └── utils.py
+│
+├── api/
+│   └── main.py
+│
+├── tests/
+│   ├── test_data.py
+│   └── test_inference.py
+│
+├── artifacts/
+│   └── .gitkeep
+│
 ├── .gitignore
+├── LICENSE
 ├── Makefile
-├── requirements.txt
 ├── pyproject.toml
+├── requirements.txt
 └── README.md
 ```
 
-## Quickstart
+Large model checkpoints, raw datasets, and generated experiment artifacts are intentionally excluded from the public repository.
 
-### 1. Create environment
+---
+
+# 🗃️ Dataset
+
+The main ABSA experiments use the **SemEval laptop review ABSA data**.
+
+The repository does not redistribute the processed benchmark files or raw benchmark XML files.
+
+The expected local workflow is:
+
+```text
+raw SemEval data
+       |
+       v
+prepare_semeval.py
+       |
+       v
+split_semeval.py
+       |
+       v
+train / validation / test
+```
+
+This approach keeps the public repository lightweight and avoids unnecessarily redistributing benchmark data.
+
+A small demo dataset is included for basic repository testing and experimentation.
+
+---
+
+# 🚀 Reproducibility
+
+Create a Python environment:
 
 ```bash
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# Linux/macOS
-source .venv/bin/activate
+```
 
+### Windows
+
+```bash
+.venv\Scripts\activate
+```
+
+### Linux/macOS
+
+```bash
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Generate a tiny demo dataset
+Run the test suite:
 
 ```bash
-python scripts/prepare_demo_data.py
+pytest -q
 ```
 
-### 3. Train a reproducible baseline
-
-```bash
-python -m src.train --model tfidf --data data/processed/demo_reviews.csv
-```
-
-### 4. Evaluate
-
-```bash
-python -m src.evaluate --predictions artifacts/predictions.csv
-```
-
-### 5. Run API
-
-```bash
-uvicorn api.main:app --reload
-```
-
-Then open:
+Expected result for the current repository:
 
 ```text
-http://127.0.0.1:8000/docs
+2 passed
 ```
 
-## Research roadmap
+---
 
-### Phase 1 — Strong baseline
-- TF-IDF + Logistic Regression
-- class weighting
-- stratified split
-- macro-F1, weighted-F1, precision, recall
+# 🧪 Running the Transformer Experiment
 
-### Phase 2 — Transformer
-Fine-tune DistilBERT/RoBERTa-style encoder for complaint classification and aspect sentiment.
+After preparing the local SemEval dataset, the transformer experiments can be run using the corresponding scripts.
 
-### Phase 3 — Multi-task learning
-Use a shared encoder with task-specific heads:
+V3:
+
+```bash
+python src/transformer_absa.py
+```
+
+V4:
+
+```bash
+python src/transformer_absa_v4.py
+```
+
+V4 produces:
 
 ```text
-                    Review
-                      |
-                Transformer
-                      |
-          +-----------+-----------+
-          |                       |
-   Sentiment head          Complaint head
-          |                       |
- aspect sentiment          complaint category
+artifacts/absa_v4/
+├── model/
+├── test_predictions.csv
+└── metrics.txt
 ```
 
-A shared representation can reduce duplicated computation while allowing each task to specialize.
+---
 
-### Phase 4 — Research-quality evaluation
-- bootstrap confidence intervals
-- calibration error
-- threshold tuning
-- subgroup/slice analysis
-- confusion matrices
-- false-positive / false-negative audit
-- ablations: preprocessing, class weights, encoder size, max sequence length
+# 🔬 Error Analysis
 
-## Metrics
+Run:
 
-For imbalanced classification, do not rely only on accuracy.
+```bash
+python src/error_analysis.py --predictions artifacts/absa_v4/test_predictions.csv
+```
 
-Primary:
-- Macro F1
-- Per-class F1
-- Precision / Recall
-- Confusion matrix
+The analysis reports:
 
-Secondary:
-- ROC-AUC / PR-AUC where appropriate
-- Expected Calibration Error (ECE)
-- inference latency
-- model size
+* overall accuracy
+* error counts
+* sentiment distributions
+* confusion pairs
+* aspect-level performance
+* missed conflict examples
+* representative prediction errors
 
-## Dataset strategy
+Generated analysis files include:
 
-For a public GitHub repository, do **not** commit large review dumps.
+```text
+error_analysis.csv
+confusion_pairs.csv
+```
 
-Recommended approach:
-1. Keep `data/raw/` empty except for `.gitkeep`.
-2. Provide download/preparation instructions.
-3. Store only a tiny demo dataset in `data/processed/`.
-4. Put large artifacts in external storage or Git LFS when licensing permits.
-5. Record dataset versions and preprocessing hashes.
+---
 
-For aspect-level sentiment, public SemEval ABSA datasets are useful for benchmarking. For complaint intelligence, use a separately labeled complaint dataset or a manually audited sample from an allowed public review source.
+# 🧠 Final Inference
 
-## What makes this stronger than a generic sentiment project
+Run:
 
-A normal portfolio project says:
+```bash
+python src/inference.py
+```
 
-> "I trained BERT for sentiment analysis."
+The final inference pipeline loads the trained V4 model and generates:
 
-This project says:
+```text
+artifacts/absa_v4/final_inference.csv
+```
 
-> "I designed an end-to-end customer-feedback intelligence system, compared classical and transformer baselines, handled class imbalance, separated aspect-level sentiment from complaint detection, evaluated calibration and error slices, and exposed the model through a production-style API."
+---
 
-That is much closer to an Applied Scientist narrative.
+# 🧪 Tests
 
-## Responsible claims
+The repository contains lightweight tests covering core data/inference functionality.
 
-Do not put invented accuracy numbers in the README or resume.
+Run:
 
-After training, replace placeholders with measured values from your own experiment:
-- Macro-F1: `XX.XX`
-- Complaint F1: `XX.XX`
-- Aspect sentiment F1: `XX.XX`
-- p95 latency: `XX ms`
+```bash
+pytest -q
+```
 
-## Resume-ready project
+Current result:
 
-**Customer Review Intelligence — Aspect-Based Sentiment & Complaint Classification**
-- Built an end-to-end NLP pipeline for extracting product aspects, predicting aspect-level sentiment, and classifying customer complaints from e-commerce review text.
-- Benchmarked TF-IDF/Logistic Regression against transformer-based models using macro-F1, per-class F1, calibration, and error-slice analysis.
-- Designed a multi-task learning formulation with shared text representations and task-specific heads; packaged inference behind a FastAPI service with reproducible training/evaluation workflows.
+```text
+2 passed
+```
 
-Only use the bullets after you have actually implemented and measured the corresponding components.
+---
+
+# ⚠️ Limitations
+
+This project has several important limitations.
+
+### 1. Small benchmark
+
+The test set contains only 332 examples.
+
+Results should therefore not be interpreted as production-level estimates.
+
+### 2. Rare conflict class
+
+Only 8 conflict examples appear in the test set.
+
+Consequently, the conflict F1 of 0.18 has high statistical uncertainty.
+
+### 3. Complaint labels
+
+The SemEval benchmark does not provide complaint annotations.
+
+The complaint component is therefore a **rule-based baseline**, not a supervised complaint-classification benchmark.
+
+### 4. Rule-based complaint detection
+
+Lexical rules can produce false positives when complaint keywords occur in non-complaint contexts.
+
+### 5. Domain limitation
+
+The main benchmark focuses on laptop reviews.
+
+Performance may differ substantially on other product categories.
+
+### 6. CPU training
+
+The transformer experiments were performed locally on CPU and are therefore intended primarily as a reproducible research/portfolio workflow rather than a latency-optimized production deployment.
+
+### 7. No claim of production readiness
+
+The project demonstrates modeling and experimentation skills; it should not be interpreted as a production Amazon system or as using private Amazon data.
+
+---
+
+# 🔭 Future Research Directions
+
+Potential extensions include:
+
+### Better conflict modeling
+
+Investigate:
+
+* larger pretrained encoders
+* contrastive learning
+* explicit compositional sentiment modeling
+* targeted augmentation
+* additional conflict-labeled datasets
+
+### Better complaint classification
+
+Collect or use a separately labeled complaint dataset and evaluate:
+
+```text
+complaint detection
+        +
+complaint category
+        +
+severity
+```
+
+with proper supervised metrics.
+
+### Confidence calibration
+
+Future experiments could evaluate:
+
+* reliability diagrams
+* Expected Calibration Error
+* temperature scaling
+* threshold selection
+
+These are **future research directions**, not claimed completed components of the current implementation.
+
+### Statistical evaluation
+
+Future work could add:
+
+* bootstrap confidence intervals
+* significance testing
+* additional random seeds
+* robustness experiments
+
+---
+
+# 🎓 Why This Is an Applied Scientist Project
+
+The goal is not simply:
+
+> "Train BERT for sentiment analysis."
+
+The project instead follows an experimental modeling process:
+
+```text
+Define problem
+      ↓
+Build classical baseline
+      ↓
+Improve representation
+      ↓
+Introduce contextual model
+      ↓
+Address class imbalance
+      ↓
+Compare experiments
+      ↓
+Analyze failures
+      ↓
+Identify remaining limitations
+      ↓
+Build a lightweight downstream intelligence layer
+```
+
+The most important result is therefore not just the final F1 score.
+
+It is the **evidence-driven progression from baseline to transformer and the analysis of why the model still fails**.
+
+---
+
+# 📈 Key Takeaways
+
+### Finding 1 — Transformer representations helped
+
+V3 increased Macro-F1 from:
+
+```text
+0.4193 → 0.5151
+```
+
+compared with the V2 classical baseline.
+
+### Finding 2 — Focal Loss improved Macro-F1 further
+
+V4 increased Macro-F1 to:
+
+```text
+0.5437
+```
+
+the highest score among the evaluated models.
+
+### Finding 3 — Rare classes remain difficult
+
+Conflict performance improved from:
+
+```text
+V3 Conflict F1 = 0.00
+V4 Conflict F1 = 0.18
+```
+
+but remains weak because the class is extremely underrepresented.
+
+### Finding 4 — Error analysis exposed systematic behavior
+
+The dominant conflict failure mode was:
+
+```text
+conflict → neutral
+```
+
+suggesting difficulty with mixed/compositional sentiment.
+
+### Finding 5 — Aggregate metrics are not enough
+
+Aspect-level analysis showed substantial variation between aspects such as:
+
+```text
+battery
+screen
+programs
+warranty
+RAM
+hinge
+```
+
+which motivates slice-based evaluation.
+
+---
+
+# 📌 Project Status
+
+| Component                        | Status            |
+| -------------------------------- | ----------------- |
+| Dataset preparation              | ✅ Complete        |
+| Train/validation/test split      | ✅ Complete        |
+| TF-IDF baseline                  | ✅ Complete        |
+| Word + character baseline        | ✅ Complete        |
+| DistilBERT ABSA                  | ✅ Complete        |
+| Focal Loss experiment            | ✅ Complete        |
+| Error analysis                   | ✅ Complete        |
+| Rule-based complaint detector    | ✅ Complete        |
+| Final inference pipeline         | ✅ Complete        |
+| Unit tests                       | ✅ Complete        |
+| Public GitHub packaging          | ✅ Complete        |
+| Supervised complaint benchmark   | ❌ Not implemented |
+| Multi-task learning              | ❌ Not implemented |
+| Calibration study                | 🔬 Future work    |
+| Statistical confidence intervals | 🔬 Future work    |
+
+---
+
+# 📄 Resume Project
+
+**Customer Review Intelligence — Aspect-Based Sentiment & Complaint Intelligence**
+
+* Built an aspect-aware NLP pipeline for customer-review sentiment analysis, progressing from TF-IDF/Logistic Regression baselines to DistilBERT with class-weighted training and focal loss.
+* Improved test Macro-F1 from **0.4109 to 0.5437** across four experiments and performed per-class, confusion-pair, and aspect-level error analysis to diagnose rare-class and mixed-sentiment failures.
+* Developed a transparent rule-based complaint-intelligence layer using review/aspect context and transformer sentiment predictions, producing structured complaint reasons without fabricating unavailable supervised labels.
+
+---
+
+# ⚖️ Research Integrity
+
+All reported metrics in this README correspond to experiments actually run in this repository.
+
+The project does **not** claim:
+
+* private Amazon data
+* production Amazon deployment
+* supervised complaint labels where none exist
+* multi-task learning
+* calibration experiments that were not run
+* statistical confidence intervals that were not computed
+* production-scale latency benchmarks
+
+The objective is to demonstrate **honest experimentation, model comparison, error analysis, and scientific reasoning**.
