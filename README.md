@@ -548,10 +548,12 @@ customer-review-intelligence/
 ├── src/
 │   ├── __init__.py
 │   ├── complaint_detector.py
-│   ├── data.py
+│   ├── complaint_data.py
 │   ├── data/
+│   │   ├── __init__.py
 │   │   ├── prepare_semeval.py
-│   │   └── split_semeval.py
+│   │   ├── split_semeval.py
+│   │   └── train_tfidf_v2.py
 │   ├── error_analysis.py
 │   ├── evaluate.py
 │   ├── inference.py
@@ -565,6 +567,8 @@ customer-review-intelligence/
 │   └── main.py
 │
 ├── tests/
+│   ├── test_absa_splits.py
+│   ├── test_api.py
 │   ├── test_data.py
 │   └── test_inference.py
 │
@@ -608,6 +612,15 @@ This approach keeps the public repository lightweight and avoids unnecessarily r
 
 A small demo dataset is included for basic repository testing and experimentation.
 
+To prepare and split the SemEval data locally, place the official `Laptop_Train_v2.xml` file at `data/raw/semeval_source/semeval_data/Laptop_Train_v2.xml`, then run:
+
+```bash
+python -m src.data.prepare_semeval
+python -m src.data.split_semeval
+```
+
+The split script groups aspect annotations by source sentence so that aspects from one sentence cannot be distributed across training, validation, and test sets. It targets an approximate 70/15/15 split; exact row counts can differ because sentence groups are kept intact. The previous word/character TF-IDF experiment script is now named `src/data/train_tfidf_v2.py` to distinguish model training from dataset splitting.
+
 ---
 
 # 🚀 Reproducibility
@@ -642,11 +655,7 @@ Run the test suite:
 pytest -q
 ```
 
-Expected result for the current repository:
-
-```text
-2 passed
-```
+The test suite covers the demo complaint-classification pipeline, grouped ABSA split isolation, and API request/response behavior. The exact test count may change as coverage grows.
 
 ---
 
@@ -971,3 +980,29 @@ The project does **not** claim:
 * production-scale latency benchmarks
 
 The objective is to demonstrate **honest experimentation, model comparison, error analysis, and scientific reasoning**.
+
+
+---
+
+# 🌐 API Usage
+
+The API expects both the full review and the target aspect. The V4 model must first be trained or otherwise saved under `artifacts/absa_v4/model`.
+
+Start the server from the repository root:
+
+```bash
+uvicorn api.main:app --reload
+```
+
+Health check: `GET /health`
+
+Prediction: `POST /predict` with JSON body:
+
+```json
+{
+  "review": "The battery drains quickly, but the screen is excellent.",
+  "aspect": "battery"
+}
+```
+
+The response includes aspect-level sentiment and confidence, plus a transparent rule-based complaint flag. The complaint flag is a heuristic output, not a supervised complaint-model prediction.

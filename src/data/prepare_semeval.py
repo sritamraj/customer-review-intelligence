@@ -23,6 +23,7 @@ OUTPUT_FILE = (
 
 
 REQUIRED_COLUMNS = [
+    "sentence_id",
     "review_text",
     "aspect",
     "sentiment",
@@ -42,6 +43,7 @@ def parse_semeval(xml_path: Path) -> pd.DataFrame:
         for aspect in sentence.findall("./aspectTerms/aspectTerm"):
             rows.append(
                 {
+                    "sentence_id": sentence.attrib.get("id", ""),
                     "review_text": text,
                     "aspect": aspect.attrib.get("term", ""),
                     "sentiment": aspect.attrib.get("polarity", ""),
@@ -58,6 +60,9 @@ def validate_dataset(df: pd.DataFrame) -> None:
 
     if missing.any():
         raise ValueError(f"Missing values found:\n{missing}")
+
+    if (df["sentence_id"].astype(str).str.strip() == "").any():
+        raise ValueError("Every ABSA row must have a non-empty sentence_id.")
 
     valid_sentiments = {
         "positive",

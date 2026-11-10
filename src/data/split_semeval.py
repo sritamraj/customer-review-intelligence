@@ -1,248 +1,91 @@
+"""Create leakage-safe train/validation/test splits for SemEval ABSA.
+
+All aspect annotations from the same source sentence are assigned to one
+split. If sentence_id is unavailable, identical review_text values are used
+as the grouping key. The split is approximately 70/15/15 using
+StratifiedGroupKFold; exact sizes can vary because groups cannot be divided.
+"""
 from pathlib import Path
 
-import joblib
 import pandas as pd
+from sklearn.model_selection import StratifiedGroupKFold
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.pipeline import FeatureUnion, Pipeline
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, f1_score
-
-
-DATA_DIR = Path("data/processed/semeval")
-
-TRAIN_FILE = DATA_DIR / "train.csv"
-VAL_FILE = DATA_DIR / "validation.csv"
-TEST_FILE = DATA_DIR / "test.csv"
-
-OUTPUT_DIR = Path("artifacts/absa_v2")
-MODEL_FILE = OUTPUT_DIR / "tfidf_word_char_logistic_regression.joblib"
-PREDICTIONS_FILE = OUTPUT_DIR / "test_predictions.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INPUT_FILE = PROJECT_ROOT / "data/processed/semeval_laptop_absa.csv"
+OUTPUT_DIR = PROJECT_ROOT / "data/processed/semeval"
+LABELS = {"positive", "negative", "neutral", "conflict"}
+RANDOM_STATE = 42
+N_SPLITS = 20
 
 
-LABELS = [
-    "positive",
-    "negative",
-    "neutral",
-    "conflict",
-]
+def create_grouped_splits(df: pd.DataFrame, n_splits: int = N_SPLITS, seed: int = RANDOM_STATE):
+    required = {"review_text", "aspect", "sentiment"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {sorted(missing)}")
+    if df[list(required)].isna().any().any():
+        raise ValueError("Input contains missing review_text, aspect, or sentiment values.")
 
+    data = df.copy().reset_index(drop=True)
+    data["sentiment"] = data["sentiment"].astype(str).str.strip().str.lower()
+    unexpected = set(data["sentiment"]) - LABELS
+    if unexpected:
+        raise ValueError(f"Unexpected sentiment labels: {sorted(unexpected)}")
 
-def build_input(df):
-    """
-    Create an aspect-aware input representation.
+    if "sentence_id" in data.columns and data["sentence_id"].notna().all():
+        groups = data["sentence_id"].astype(str)
+    else:
+        # Fallback is conservative: duplicate sentence text cannot leak across splits.
+        groups = data["review_text"].astype(str)
 
-    Example:
-        review text + [ASPECT] + aspect term
+    unique_groups = groups.nunique()
+    if unique_groups < n_splits:
+        raise ValueError(f"Need at least {n_splits} unique sentence groups; found {unique_groups}.")
 
-    This allows the classifier to use the review context
-    together with the specific aspect being evaluated.
-    """
+    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    fold_for_row = pd.Series(index=data.index, dtype="int64")
+    dummy_x = data["review_text"].astype(str)
+    for fold, (_, held_out) in enumerate(splitter.split(dummy_x, data["sentiment"], groups)):
+        fold_for_row.iloc[held_out] = fold
 
-    return (
-        df["review_text"].fillna("").astype(str)
-        + " [ASPECT] "
-        + df["aspect"].fillna("").astype(str)
-    )
+    # 14/20 train, 3/20 validation, 3/20 test: approximately 70/15/15.
+    test_mask = fold_for_row.isin([0, 1, 2])
+    val_mask = fold_for_row.isin([3, 4, 5])
+    train_mask = ~(test_mask | val_mask)
+    splits = {
+        "train": data.loc[train_mask].copy(),
+        "validation": data.loc[val_mask].copy(),
+        "test": data.loc[test_mask].copy(),
+    }
 
+    # Explicitly verify group isolation.
+    group_sets = {name: set(groups.loc[part.index]) for name, part in splits.items()}
+    names = list(group_sets)
+    for i, left in enumerate(names):
+        for right in names[i + 1:]:
+            overlap = group_sets[left] & group_sets[right]
+            if overlap:
+                raise RuntimeError(f"Group leakage between {left} and {right}: {len(overlap)} groups")
 
-def build_model():
-
-    word_vectorizer = TfidfVectorizer(
-        analyzer="word",
-        ngram_range=(1, 2),
-        min_df=2,
-        max_features=30000,
-        sublinear_tf=True,
-        strip_accents="unicode",
-    )
-
-    char_vectorizer = TfidfVectorizer(
-        analyzer="char_wb",
-        ngram_range=(3, 5),
-        min_df=2,
-        max_features=30000,
-        sublinear_tf=True,
-    )
-
-    features = FeatureUnion(
-        [
-            ("word_tfidf", word_vectorizer),
-            ("char_tfidf", char_vectorizer),
-        ]
-    )
-
-    classifier = LogisticRegression(
-        max_iter=3000,
-        class_weight="balanced",
-        random_state=42,
-    )
-
-    model = Pipeline(
-        [
-            ("features", features),
-            ("classifier", classifier),
-        ]
-    )
-
-    return model
-
-
-def evaluate(model, x, y, split_name):
-
-    predictions = model.predict(x)
-
-    macro_f1 = f1_score(
-        y,
-        predictions,
-        labels=LABELS,
-        average="macro",
-        zero_division=0,
-    )
-
-    weighted_f1 = f1_score(
-        y,
-        predictions,
-        labels=LABELS,
-        average="weighted",
-        zero_division=0,
-    )
-
-    print("\n" + "=" * 70)
-    print(f"{split_name.upper()} RESULTS")
-    print("=" * 70)
-
-    print(
-        classification_report(
-            y,
-            predictions,
-            labels=LABELS,
-            digits=4,
-            zero_division=0,
-        )
-    )
-
-    print(f"{split_name} Macro-F1:    {macro_f1:.4f}")
-    print(f"{split_name} Weighted-F1: {weighted_f1:.4f}")
-
-    return predictions, macro_f1, weighted_f1
+    return splits
 
 
 def main():
-
-    print("=" * 70)
-    print("ABSA V2: WORD + CHARACTER TF-IDF")
-    print("=" * 70)
-
-    for file in [TRAIN_FILE, VAL_FILE, TEST_FILE]:
-        if not file.exists():
-            raise FileNotFoundError(
-                f"Required dataset not found: {file}"
-            )
-
-    train_df = pd.read_csv(TRAIN_FILE)
-    val_df = pd.read_csv(VAL_FILE)
-    test_df = pd.read_csv(TEST_FILE)
-
-    required_columns = {
-        "review_text",
-        "aspect",
-        "sentiment",
-    }
-
-    for name, df in [
-        ("train", train_df),
-        ("validation", val_df),
-        ("test", test_df),
-    ]:
-
-        missing = required_columns - set(df.columns)
-
-        if missing:
-            raise ValueError(
-                f"{name} dataset is missing columns: "
-                f"{sorted(missing)}"
-            )
-
-    print("\nDataset sizes:")
-    print(f"Train:      {len(train_df)}")
-    print(f"Validation: {len(val_df)}")
-    print(f"Test:       {len(test_df)}")
-
-    x_train = build_input(train_df)
-    y_train = train_df["sentiment"]
-
-    x_val = build_input(val_df)
-    y_val = val_df["sentiment"]
-
-    x_test = build_input(test_df)
-    y_test = test_df["sentiment"]
-
-    print("\nBuilding V2 model...")
-
-    model = build_model()
-
-    print("\nTraining...")
-    model.fit(x_train, y_train)
-
-    print("\nEvaluating validation set...")
-
-    val_predictions, val_macro_f1, val_weighted_f1 = evaluate(
-        model,
-        x_val,
-        y_val,
-        "Validation",
-    )
-
-    print("\nEvaluating test set...")
-
-    test_predictions, test_macro_f1, test_weighted_f1 = evaluate(
-        model,
-        x_test,
-        y_test,
-        "Test",
-    )
-
-    OUTPUT_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    joblib.dump(
-        model,
-        MODEL_FILE,
-    )
-
-    predictions_df = pd.DataFrame(
-        {
-            "review_text": test_df["review_text"],
-            "aspect": test_df["aspect"],
-            "true_sentiment": y_test,
-            "predicted_sentiment": test_predictions,
-        }
-    )
-
-    predictions_df.to_csv(
-        PREDICTIONS_FILE,
-        index=False,
-    )
-
-    print("\n" + "=" * 70)
-    print("V2 SAVED ARTIFACTS")
-    print("=" * 70)
-
-    print(f"Model:       {MODEL_FILE}")
-    print(f"Predictions: {PREDICTIONS_FILE}")
-
-    print("\n" + "=" * 70)
-    print("V2 SUMMARY")
-    print("=" * 70)
-
-    print(f"Validation Macro-F1: {val_macro_f1:.4f}")
-    print(f"Test Macro-F1:       {test_macro_f1:.4f}")
-    print(f"Test Weighted-F1:    {test_weighted_f1:.4f}")
-
-    print("\nV2 training complete.")
+    if not INPUT_FILE.exists():
+        raise FileNotFoundError(
+            f"Prepared SemEval CSV not found: {INPUT_FILE}\n"
+            "First run: python -m src.data.prepare_semeval"
+        )
+    df = pd.read_csv(INPUT_FILE)
+    splits = create_grouped_splits(df)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for name, part in splits.items():
+        path = OUTPUT_DIR / f"{name}.csv"
+        part.to_csv(path, index=False)
+        print(f"{name:10s}: {len(part):4d} rows -> {path.relative_to(PROJECT_ROOT)}")
+        print(part["sentiment"].value_counts().sort_index().to_string())
+    print("\nGroup leakage check: PASSED")
+    print("Note: split sizes are approximate because complete sentences are kept together.")
 
 
 if __name__ == "__main__":
